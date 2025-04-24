@@ -1,4 +1,4 @@
-enum LogType { info, success, error }
+enum LogType { info, success, error, warning }
 
 class LogMessage {
   final String message;

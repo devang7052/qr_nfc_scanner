@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:hyperlab_nfc_generator/widgets/ble_device_dialouge.dart';
 import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../models/scan_data.dart';
 import '../models/scanning_state.dart';
 import '../models/log_message.dart';
 import '../services/nfc_service.dart';
+import '../services/ble_service.dart';
 import '../services/storage_service.dart';
 
 class ScannerController {
@@ -17,10 +20,12 @@ class ScannerController {
   
   // Services
   late NfcService nfcService;
+  late BleService bleService;
   late StorageService storageService;
   
   // State variables
   ScanningState scanningState = ScanningState.idle;
+  NfcScanMode nfcScanMode = NfcScanMode.internal;
   bool isNfcButtonPressed = false;
   bool isFlashOn = false;
   bool hasFlash = false;
@@ -29,6 +34,10 @@ class ScannerController {
   String nfcStatus = 'Ready to scan';
   double brightness = 1.0;
   double contrast = 1.0;
+  
+  // BLE state variables
+  bool isConnectedToBleDevice = false;
+  String connectedBleDeviceName = '';
   
   // Data variables
   List<ScanData> scannedData = [];
@@ -41,12 +50,18 @@ class ScannerController {
   // UI Callbacks that will be set by the screen
   Function? notifyDuplicateNfcTag;
   Function? notifySuccessfulNfcScan;
+  Function(BuildContext)? notifyBleConnectionFailed;
   
   ScannerController({required this.stateUpdater}) {
     // Initialize services
     nfcService = NfcService(
       logCallback: logToConsole,
       onNfcSuccess: _handleNfcSuccess,
+    );
+    
+    bleService = BleService(
+      logCallback: logToConsole,
+      onRfidSuccess: _handleNfcSuccess,
     );
     
     storageService = StorageService(
@@ -58,6 +73,7 @@ class ScannerController {
   Future<void> initialize() async {
     await storageService.requestAllPermissions();
     await nfcService.initialize();
+    await bleService.initialize();
     await _checkCameraPermission();
     await _loadSavedData();
     
@@ -68,8 +84,9 @@ class ScannerController {
   /// Dispose the controller
   void dispose() {
     qrController.dispose();
-    if (scanningState == ScanningState.nfcScanning) {
+    if (scanningState == ScanningState.nfcScanning || scanningState == ScanningState.bleScanning) {
       nfcService.stopNfcSession();
+      bleService.disconnectDevice();
     }
   }
   
@@ -153,11 +170,78 @@ class ScannerController {
     }
   }
   
+  /// Toggle between internal NFC and external BLE scanning
+  void toggleNfcScanMode() {
+    stateUpdater(() {
+      nfcScanMode = (nfcScanMode == NfcScanMode.internal) 
+          ? NfcScanMode.externalBle 
+          : NfcScanMode.internal;
+      
+      logToConsole(
+        'Switched to ${nfcScanMode == NfcScanMode.internal ? 'Internal NFC' : 'External BLE'} mode', 
+        LogType.info
+      );
+    });
+  }
+  
+  /// Show the BLE device selection dialog
+  void showBleDeviceSelection(BuildContext context) {
+    // Use Future.delayed to ensure we're not in the build phase
+    Future.delayed(Duration.zero, () {
+      if (!context.mounted) return;
+      
+      showDialog(
+        context: context,
+        builder: (dialogContext) => BleDeviceDialog(
+          startScan: () => bleService.startScan(),
+          onDeviceSelected: (device) => _connectToBleDevice(dialogContext, device),
+        ),
+      );
+    });
+  }
+  
+  /// Connect to a selected BLE device
+  Future<void> _connectToBleDevice(BuildContext context, BluetoothDevice device) async {
+    stateUpdater(() {
+      nfcStatus = 'Connecting to ${device.advName}...';
+    });
+    
+    bool success = await bleService.connectToDevice(device);
+    
+    if (success) {
+      stateUpdater(() {
+        isConnectedToBleDevice = true;
+        connectedBleDeviceName = device.advName.isNotEmpty ? device.advName : 'Unknown Device';
+        nfcStatus = 'Connected to BLE device';
+      });
+    } else {
+      stateUpdater(() {
+        isConnectedToBleDevice = false;
+        nfcStatus = 'BLE connection failed';
+      });
+      
+      // Notify the UI about connection failure
+      notifyBleConnectionFailed?.call(context);
+    }
+  }
+  
+  /// Disconnect from the BLE device
+  Future<void> disconnectBleDevice() async {
+    await bleService.disconnectDevice();
+    
+    stateUpdater(() {
+      isConnectedToBleDevice = false;
+      connectedBleDeviceName = '';
+      nfcStatus = 'BLE device disconnected';
+    });
+  }
+  
   /// Start NFC scanning
   Future<void> startNfcScan() async {
     if (isNfcButtonPressed) return;
     
-    try {
+    // Use different approach based on selected mode
+    if (nfcScanMode == NfcScanMode.internal) {
       // Use internal NFC
       bool success = await nfcService.startNfcSession();
       if (success) {
@@ -171,22 +255,42 @@ class ScannerController {
           nfcStatus = 'Please enable NFC in settings';
         });
       }
-    } catch (e) {
-      stateUpdater(() {
-        isNfcButtonPressed = false;
-        nfcStatus = 'Error starting scan';
-      });
-      logToConsole('Error starting scanner: $e', LogType.error);
+    } else {
+      // Use external BLE RFID reader
+      if (!isConnectedToBleDevice) {
+        stateUpdater(() {
+          nfcStatus = 'Connect to BLE device first';
+        });
+        return;
+      }
+      
+      bool success = await bleService.sendRfidScanScript();
+      if (success) {
+        stateUpdater(() {
+          scanningState = ScanningState.bleScanning;
+          isNfcButtonPressed = true;
+          nfcStatus = 'External RFID scanner active';
+        });
+      } else {
+        stateUpdater(() {
+          nfcStatus = 'Failed to start external scanner';
+        });
+      }
     }
   }
   
   /// Stop NFC scanning
   Future<void> stopNfcScan() async {
-    if (scanningState != ScanningState.nfcScanning) return;
+    if (scanningState != ScanningState.nfcScanning && scanningState != ScanningState.bleScanning) return;
     
     try {
-      // Stop the NFC session
-      nfcService.stopNfcSession();
+      if (scanningState == ScanningState.nfcScanning) {
+        // Stop the NFC session
+        nfcService.stopNfcSession();
+      } else if (scanningState == ScanningState.bleScanning) {
+        // Stop the BLE scanner
+        await bleService.stopLuaCode();
+      }
       
       stateUpdater(() {
         scanningState = ScanningState.idle;
@@ -225,11 +329,11 @@ class ScannerController {
         
         // IMPORTANT: Set the state variables manually first
         stateUpdater(() {
-          scanningState = ScanningState.nfcScanning;
-          nfcStatus = 'Preparing NFC scan...';
+          scanningState = nfcScanMode == NfcScanMode.internal ? ScanningState.nfcScanning : ScanningState.bleScanning;
+          nfcStatus = 'Preparing ${nfcScanMode == NfcScanMode.internal ? "NFC" : "RFID"} scan...';
         });
         
-        logToConsole('Switching to NFC mode', LogType.info);
+        logToConsole('Switching to ${nfcScanMode == NfcScanMode.internal ? "NFC" : "RFID"} mode', LogType.info);
         
         // Use a short delay to ensure state is updated before starting NFC
         Future.delayed(Duration(milliseconds: 100), () {
@@ -242,7 +346,7 @@ class ScannerController {
     }
   }
   
-  /// Handle NFC tag success from internal NFC
+  /// Handle NFC tag success from internal NFC or external BLE
   void _handleNfcSuccess(String nfcText) {
     if (nfcText.isEmpty) return;
     
@@ -251,8 +355,8 @@ class ScannerController {
     
     stateUpdater(() {
       if (isDuplicate) {
-        nfcStatus = 'Duplicate NFC Tag!';
-        logToConsole('Duplicate NFC Tag detected: $nfcText', LogType.error);
+        nfcStatus = 'Duplicate Tag!';
+        logToConsole('Duplicate Tag detected: $nfcText', LogType.error);
         
         // Play error sound or vibrate if possible
         HapticFeedback.heavyImpact();
@@ -265,7 +369,7 @@ class ScannerController {
       } else {
         nfcStatus = 'Tag Read Successfully!';
         currentNfcData = nfcText;
-        logToConsole('NFC Tag read: $nfcText', LogType.success);
+        logToConsole('Tag read: $nfcText', LogType.success);
         
         // Immediately add the NFC data to the pending QR data
         _addScanData(nfcData: nfcText);
@@ -410,8 +514,13 @@ class ScannerController {
     // Reset NFC
     await nfcService.initialize();
     
+    // Disconnect BLE
+    if (isConnectedToBleDevice) {
+      await disconnectBleDevice();
+    }
+    
     // If in NFC mode, go back to QR scanning
-    if (scanningState == ScanningState.nfcScanning) {
+    if (scanningState == ScanningState.nfcScanning || scanningState == ScanningState.bleScanning) {
       stopNfcScan();
     } else if (scanningState == ScanningState.idle) {
       _startQrScan();
@@ -446,8 +555,10 @@ class ScannerController {
   void setNotificationCallbacks({
     required Function onDuplicateTag,
     required Function onSuccessfulScan,
+    Function(BuildContext)? onBleConnectionFailed,
   }) {
     notifyDuplicateNfcTag = onDuplicateTag;
     notifySuccessfulNfcScan = onSuccessfulScan;
+    notifyBleConnectionFailed = onBleConnectionFailed;
   }
-} 
+}

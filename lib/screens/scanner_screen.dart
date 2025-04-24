@@ -30,6 +30,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     _controller.setNotificationCallbacks(
       onDuplicateTag: _showDuplicateTagWarning,
       onSuccessfulScan: _showSuccessfulScanMessage,
+      onBleConnectionFailed: _showBleConnectionError,
     );
     
     _controller.initialize();
@@ -43,7 +44,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Widget _buildScannerContent() {
     // Show appropriate scanner based on current state
-    if (_controller.scanningState == ScanningState.nfcScanning) {
+    if (_controller.scanningState == ScanningState.nfcScanning || 
+        _controller.scanningState == ScanningState.bleScanning) {
       return NfcScannerWidget(controller: _controller);
     } else {
       return QrScannerWidget(controller: _controller);
@@ -54,7 +56,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   void _showDuplicateTagWarning() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('This NFC tag has already been scanned'),
+        content: Text('This tag has already been scanned'),
         backgroundColor: Colors.red,
         duration: Duration(seconds: 3),
       ),
@@ -71,6 +73,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
     );
   }
+  
+  // Show error message for BLE connection failure
+  void _showBleConnectionError(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Failed to connect to BLE device. Please try again.'),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,8 +92,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
         title: const Text('QR & NFC Scanner Tool'),
         actions: [
           // Add state indicator in app bar
-          Text(_controller.scanningState == ScanningState.nfcScanning ? 'NFC Mode' : 'QR Mode'),
-          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: _getScanModeWidget(),
+          ),
           // Add a refresh button that clears all data
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -146,7 +161,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
               
               // Console Section
               Card(
-                child: ConsoleWidget(controller: _controller),
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: ConsoleWidget(controller: _controller),
+                ),
               ),
             ],
           ),
@@ -154,4 +172,49 @@ class _ScannerScreenState extends State<ScannerScreen> {
       ),
     );
   }
-} 
+
+  // Helper widget to display current scanning mode
+  Widget _getScanModeWidget() {
+    IconData icon;
+    String text;
+    Color color;
+    
+    if (_controller.scanningState == ScanningState.qrScanning) {
+      icon = Icons.qr_code;
+      text = 'QR Mode';
+      color = Colors.blue;
+    } else if (_controller.scanningState == ScanningState.nfcScanning) {
+      icon = Icons.nfc;
+      text = 'NFC Mode';
+      color = Colors.green;
+    } else if (_controller.scanningState == ScanningState.bleScanning) {
+      icon = Icons.bluetooth;
+      text = 'BLE Mode';
+      color = Colors.purple;
+    } else {
+      icon = Icons.sensors;
+      text = 'Idle';
+      color = Colors.grey;
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 4),
+          Text(
+            text,
+            style: TextStyle(color: color, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+}
