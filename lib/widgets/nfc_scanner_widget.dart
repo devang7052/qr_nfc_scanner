@@ -20,36 +20,6 @@ class NfcScannerWidget extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         
-        // Add NFC reader toggle switch
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('Device NFC'),
-            Switch(
-              value: controller.useExternalNfcReader,
-              onChanged: controller.toggleNfcReaderType,
-            ),
-            const Text('RFID Reader'),
-          ],
-        ),
-        
-        // Update TextField for better handling RFID input
-        if (controller.useExternalNfcReader && controller.isNfcButtonPressed)
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: controller.rfidInputController,
-              focusNode: controller.rfidFocusNode,
-              autofocus: true,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'RFID Input (Collecting data...)',
-                hintText: 'RFID data will appear here...',
-              ),
-            ),
-          ),
-        
-        const SizedBox(height: 16),
         // NFC Scanner Window
         Container(
           height: 350,
@@ -77,8 +47,8 @@ class NfcScannerWidget extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    controller.useExternalNfcReader ? Icons.contactless : Icons.nfc,
+                  const Icon(
+                    Icons.nfc,
                     size: 100,
                     color: Colors.green,
                   ),
@@ -105,9 +75,7 @@ class NfcScannerWidget extends StatelessWidget {
                   const SizedBox(height: 24),
                   Text(
                     controller.isNfcButtonPressed
-                      ? controller.useExternalNfcReader
-                        ? 'Use your RFID reader to scan a tag'
-                        : 'Hold your device near an NFC tag'
+                      ? 'Hold your device near an NFC tag'
                       : 'Press Start Scan to begin',
                     style: const TextStyle(fontSize: 16),
                   ),

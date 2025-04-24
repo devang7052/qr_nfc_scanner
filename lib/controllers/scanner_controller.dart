@@ -10,13 +10,10 @@ import '../models/scanning_state.dart';
 import '../models/log_message.dart';
 import '../services/nfc_service.dart';
 import '../services/storage_service.dart';
-import '../utils/rfid_utils.dart';
 
 class ScannerController {
   // Controllers
   final MobileScannerController qrController = MobileScannerController();
-  final TextEditingController rfidInputController = TextEditingController();
-  final FocusNode rfidFocusNode = FocusNode();
   
   // Services
   late NfcService nfcService;
@@ -32,16 +29,11 @@ class ScannerController {
   String nfcStatus = 'Ready to scan';
   double brightness = 1.0;
   double contrast = 1.0;
-  bool useExternalNfcReader = false;
   
   // Data variables
   List<ScanData> scannedData = [];
   ScanData? pendingRow;
   List<LogMessage> logMessages = [];
-  
-  // RFID collection variables
-  String collectedRfidData = '';
-  bool isCollectingRfid = false;
   
   // Listeners
   Function(VoidCallback) stateUpdater;
@@ -60,9 +52,6 @@ class ScannerController {
     storageService = StorageService(
       logCallback: logToConsole,
     );
-    
-    // Add listener for RFID input
-    rfidInputController.addListener(_handleRfidInput);
   }
   
   /// Initialize the controller
@@ -78,9 +67,6 @@ class ScannerController {
   
   /// Dispose the controller
   void dispose() {
-    rfidInputController.removeListener(_handleRfidInput);
-    rfidInputController.dispose();
-    rfidFocusNode.dispose();
     qrController.dispose();
     if (scanningState == ScanningState.nfcScanning) {
       nfcService.stopNfcSession();
@@ -172,46 +158,18 @@ class ScannerController {
     if (isNfcButtonPressed) return;
     
     try {
-      if (useExternalNfcReader) {
-        // Reset collection variables
-        isCollectingRfid = false;
-        collectedRfidData = '';
-        
+      // Use internal NFC
+      bool success = await nfcService.startNfcSession();
+      if (success) {
         stateUpdater(() {
           scanningState = ScanningState.nfcScanning;
           isNfcButtonPressed = true;
-          nfcStatus = 'Ready for RFID scan';
+          nfcStatus = 'Scanning... (Ready for tag)';
         });
-        
-        logToConsole('RFID scanner ready', LogType.success);
-        
-        // Clear any existing text
-        rfidInputController.clear();
-        
-        // Focus the text field with a slight delay to ensure UI is ready
-        Future.delayed(Duration(milliseconds: 100), () {
-          if (rfidFocusNode.canRequestFocus) {
-            rfidFocusNode.requestFocus();
-            logToConsole('Focus requested for RFID input', LogType.info);
-          }
-        });
-        
-        // Keep the keyboard visible
-        SystemChannels.textInput.invokeMethod('TextInput.show');
       } else {
-        // Use internal NFC
-        bool success = await nfcService.startNfcSession();
-        if (success) {
-          stateUpdater(() {
-            scanningState = ScanningState.nfcScanning;
-            isNfcButtonPressed = true;
-            nfcStatus = 'Scanning... (Ready for tag)';
-          });
-        } else {
-          stateUpdater(() {
-            nfcStatus = 'Please enable NFC in settings';
-          });
-        }
+        stateUpdater(() {
+          nfcStatus = 'Please enable NFC in settings';
+        });
       }
     } catch (e) {
       stateUpdater(() {
@@ -227,21 +185,8 @@ class ScannerController {
     if (scanningState != ScanningState.nfcScanning) return;
     
     try {
-      if (!useExternalNfcReader) {
-        // Only stop the internal NFC session if using built-in NFC
-        nfcService.stopNfcSession();
-      } else if (isCollectingRfid && collectedRfidData.isNotEmpty) {
-        // Process the fully collected RFID data when stopping the scan
-        String finalRfidData = collectedRfidData.trim();
-        logToConsole('Processing complete RFID data: $finalRfidData', LogType.success);
-        
-        // Now process the complete RFID data
-        _processCompleteRfidData(finalRfidData);
-        
-        // Reset collection variables
-        isCollectingRfid = false;
-        collectedRfidData = '';
-      }
+      // Stop the NFC session
+      nfcService.stopNfcSession();
       
       stateUpdater(() {
         scanningState = ScanningState.idle;
@@ -251,28 +196,11 @@ class ScannerController {
       
       logToConsole('Scanner stopped', LogType.success);
       
-      // Clear the input field
-      rfidInputController.clear();
-      
       // Automatically restart QR scanning
       _startQrScan();
     } catch (e) {
       logToConsole('Error stopping scanner: $e', LogType.error);
     }
-  }
-  
-  /// Toggle NFC reader type between built-in and external
-  void toggleNfcReaderType(bool useExternal) {
-    stateUpdater(() {
-      useExternalNfcReader = useExternal;
-      isNfcButtonPressed = false;
-      
-      if (useExternal) {
-        nfcStatus = 'Ready for RFID reader';
-      } else {
-        nfcStatus = 'Ready to scan';
-      }
-    });
   }
   
   /// Handle QR code detection
@@ -311,65 +239,6 @@ class ScannerController {
       }
     } catch (error) {
       logToConsole('Invalid QR Code format: $error', LogType.error);
-    }
-  }
-  
-  /// Handle accumulated RFID input
-  void _handleRfidInput() {
-    // Get the text and add it to our collection buffer
-    String newInput = rfidInputController.text;
-    
-    if (newInput.isNotEmpty) {
-      // Start collecting mode if we have data
-      if (!isCollectingRfid) {
-        isCollectingRfid = true;
-        collectedRfidData = '';
-        logToConsole('Started collecting RFID data...', LogType.info);
-      }
-      
-      // Accumulate the data (remove any previous collection to avoid duplication)
-      collectedRfidData = newInput;
-      
-      // Update the status to show we're collecting
-      stateUpdater(() {
-        nfcStatus = 'Receiving RFID data... (${collectedRfidData.length} chars)';
-      });
-    }
-  }
-  
-  /// Process complete RFID data from external reader
-  void _processCompleteRfidData(String data) {
-    try {
-      if (data.isEmpty) {
-        logToConsole('No RFID data to process', LogType.error);
-        return;
-      }
-      
-      // Log the raw input for debugging
-      logToConsole('Raw RFID input from external reader: "$data"', LogType.info);
-      
-      // Format the NFC data using the new conversion method
-      final nfcText = RfidUtils.convertRfidFormat(data);
-      
-      // Check for duplicates
-      bool isDuplicate = _checkForDuplicateNfcData(nfcText);
-      
-      if (isDuplicate) {
-        logToConsole('Duplicate NFC Tag detected: $nfcText', LogType.error);
-        
-        // Notify about duplicate through callback
-        _notifyDuplicateNfcTag();
-      } else {
-        logToConsole('RFID Tag processed: $nfcText', LogType.success);
-        
-        // Add the NFC data to our records
-        _addScanData(nfcData: nfcText);
-        
-        // Notify about successful scan through callback
-        _notifySuccessfulNfcScan();
-      }
-    } catch (e) {
-      logToConsole('Error processing complete RFID data: $e', LogType.error);
     }
   }
   

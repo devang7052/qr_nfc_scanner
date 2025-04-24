@@ -50,35 +50,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-  void _showRfidTroubleshootingDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('RFID Troubleshooting'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text('If your RFID reader is not working:'),
-            SizedBox(height: 8),
-            Text('1. Make sure your RFID reader is properly connected'),
-            Text('2. Try reconnecting the reader'),
-            Text('3. Some readers require special configuration'),
-            Text('4. Check if the reader works in other apps'),
-            SizedBox(height: 16),
-            Text('You can also try the visible text field which should receive input when you scan a tag.')
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
   // Show warning for duplicate tag
   void _showDuplicateTagWarning() {
     ScaffoldMessenger.of(context).showSnackBar(
